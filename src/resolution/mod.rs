@@ -10,6 +10,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "async")]
+use maybe_async::must_be_async;
+#[cfg(not(feature = "async"))]
+use maybe_async::must_be_sync;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct CacheKey {
     pub key: CompactString,
@@ -76,9 +81,22 @@ impl DependencyGraph {
     pub fn detect_cycle(&self, start: &str) -> Vec<CompactString> {
         let mut visited = HashMap::new();
         let mut path = Vec::new();
+        self.detect_cycle_with_state(start, &mut visited, &mut path)
+    }
 
-        if self.dfs_detect_cycle(start, &mut visited, &mut path) {
-            path
+    /// Detect cycle with reusable state - useful for batch checking.
+    /// The visited HashMap is cleared automatically before each check.
+    pub fn detect_cycle_with_state(
+        &self,
+        start: &str,
+        visited: &mut HashMap<CompactString, bool>,
+        path: &mut Vec<CompactString>,
+    ) -> Vec<CompactString> {
+        visited.clear();
+        path.clear();
+
+        if self.dfs_detect_cycle(start, visited, path) {
+            std::mem::take(path)
         } else {
             Vec::new()
         }
@@ -449,7 +467,8 @@ impl ResolutionEngine {
         Ok(results)
     }
 
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     pub async fn resolve(
         &self,
         key: &str,
@@ -583,20 +602,26 @@ impl ResolutionEngine {
 
         match germi.interpolate(value) {
             Ok(interpolated) => CompactString::new(interpolated.as_ref()),
-            Err(_) => CompactString::new(value),
+            Err(e) => {
+                tracing::warn!(
+                    value = %value,
+                    depth = %depth,
+                    error = %e,
+                    "Interpolation failed, returning original value"
+                );
+                CompactString::new(value)
+            }
         }
     }
 
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     pub async fn all_variables(
         &self,
         context: &super::workspace::WorkspaceContext,
         registry: &super::source::SourceRegistry,
     ) -> Result<Vec<Arc<ResolvedVariable>>> {
-        let snapshots = registry
-            .load_all()
-            .await
-            .map_err(AbundantisError::Source)?;
+        let snapshots = registry.load_all().await.map_err(AbundantisError::Source)?;
 
         if self.resolution_config.type_check {
             self.maybe_rebuild_graph(&snapshots)?;
@@ -605,7 +630,8 @@ impl ResolutionEngine {
         self.all_variables_inner(context, &snapshots, &snapshots.iter().collect::<Vec<_>>())
     }
 
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     pub async fn resolve_with_filter(
         &self,
         key: &str,
@@ -623,10 +649,7 @@ impl ResolutionEngine {
             return Ok(Some(cached));
         }
 
-        let snapshots = registry
-            .load_all()
-            .await
-            .map_err(AbundantisError::Source)?;
+        let snapshots = registry.load_all().await.map_err(AbundantisError::Source)?;
 
         let filtered_refs = self.filter_snapshots_ref(&snapshots, file_source_filter);
 
@@ -664,17 +687,15 @@ impl ResolutionEngine {
         Ok(resolved)
     }
 
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     pub async fn all_variables_with_filter(
         &self,
         context: &super::workspace::WorkspaceContext,
         registry: &super::source::SourceRegistry,
         file_source_filter: Option<&HashSet<super::source::SourceId>>,
     ) -> Result<Vec<Arc<ResolvedVariable>>> {
-        let snapshots = registry
-            .load_all()
-            .await
-            .map_err(AbundantisError::Source)?;
+        let snapshots = registry.load_all().await.map_err(AbundantisError::Source)?;
 
         let filtered_refs = self.filter_snapshots_ref(&snapshots, file_source_filter);
 
@@ -683,121 +704,6 @@ impl ResolutionEngine {
         }
 
         self.all_variables_inner(context, &snapshots, &filtered_refs)
-    }
-
-    #[cfg(not(feature = "async"))]
-    pub fn all_variables(
-        &self,
-        context: &super::workspace::WorkspaceContext,
-        registry: &super::source::SourceRegistry,
-    ) -> Result<Vec<Arc<ResolvedVariable>>> {
-        let snapshots = registry.load_all().map_err(AbundantisError::Source)?;
-
-        if self.resolution_config.type_check {
-            self.maybe_rebuild_graph(&snapshots)?;
-        }
-
-        self.all_variables_inner(context, &snapshots, &snapshots.iter().collect::<Vec<_>>())
-    }
-
-    #[cfg(not(feature = "async"))]
-    pub fn resolve_with_filter(
-        &self,
-        key: &str,
-        context: &super::workspace::WorkspaceContext,
-        registry: &super::source::SourceRegistry,
-        file_source_filter: Option<&HashSet<super::source::SourceId>>,
-    ) -> Result<Option<Arc<ResolvedVariable>>> {
-        let context_hash = self.hash_context(context);
-        let cache_key = CacheKey {
-            key: CompactString::new(key),
-            context_hash,
-        };
-
-        if let Some(cached) = self.cache.get(&cache_key) {
-            return Ok(Some(cached));
-        }
-
-        let snapshots = registry.load_all().map_err(AbundantisError::Source)?;
-
-        let filtered_refs = self.filter_snapshots_ref(&snapshots, file_source_filter);
-
-        if self.resolution_config.type_check {
-            self.maybe_rebuild_graph(&snapshots)?;
-        }
-
-        // Sort filtered snapshots by file precedence order
-        let sorted_filtered = self.sort_snapshot_refs_by_file_order(&filtered_refs);
-
-        let mut resolved = None;
-        // Last match wins for file precedence
-        for snapshot in sorted_filtered {
-            if let Some(variable) = snapshot.variables.iter().find(|v| v.key.as_str() == key) {
-                resolved = Some(self.resolve_variable(
-                    variable,
-                    &snapshots,
-                    context,
-                    0,
-                    &mut Vec::new(),
-                )?);
-                // Don't break - keep iterating so later files override earlier ones
-            }
-        }
-
-        if let Some(ref var) = resolved {
-            if var.has_warnings && self.resolution_config.type_check {
-                return Err(AbundantisError::CircularDependency {
-                    chain: format!("Cycle detected resolving '{}'", key),
-                });
-            }
-            self.cache.insert(cache_key, Arc::clone(var));
-        }
-
-        Ok(resolved)
-    }
-
-    #[cfg(not(feature = "async"))]
-    pub fn all_variables_with_filter(
-        &self,
-        context: &super::workspace::WorkspaceContext,
-        registry: &super::source::SourceRegistry,
-        file_source_filter: Option<&HashSet<super::source::SourceId>>,
-    ) -> Result<Vec<Arc<ResolvedVariable>>> {
-        let snapshots = registry.load_all().map_err(AbundantisError::Source)?;
-
-        let filtered_refs = self.filter_snapshots_ref(&snapshots, file_source_filter);
-
-        if self.resolution_config.type_check {
-            self.maybe_rebuild_graph(&snapshots)?;
-        }
-
-        self.all_variables_inner(context, &snapshots, &filtered_refs)
-    }
-
-    #[cfg(not(feature = "async"))]
-    pub fn resolve(
-        &self,
-        key: &str,
-        context: &super::workspace::WorkspaceContext,
-        registry: &super::source::SourceRegistry,
-    ) -> Result<Option<Arc<ResolvedVariable>>> {
-        let context_hash = self.hash_context(context);
-        let cache_key = CacheKey {
-            key: CompactString::new(key),
-            context_hash,
-        };
-
-        if let Some(cached) = self.cache.get(&cache_key) {
-            return Ok(Some(cached));
-        }
-
-        let snapshots = registry.load_all().map_err(AbundantisError::Source)?;
-
-        if self.resolution_config.type_check {
-            self.maybe_rebuild_graph(&snapshots)?;
-        }
-
-        self.resolve_inner(key, context, &snapshots)
     }
 
     fn hash_context(&self, context: &super::workspace::WorkspaceContext) -> u64 {
@@ -833,10 +739,12 @@ impl ResolutionEngine {
             }
         }
 
-        // Check for cycles
+        // Check for cycles - reuse HashMap and Vec across iterations
+        let mut visited = HashMap::new();
+        let mut path = Vec::new();
         for snapshot in snapshots {
             for variable in snapshot.variables.iter() {
-                let cycle = graph.detect_cycle(variable.key.as_str());
+                let cycle = graph.detect_cycle_with_state(variable.key.as_str(), &mut visited, &mut path);
                 if !cycle.is_empty() {
                     let chain = cycle
                         .iter()

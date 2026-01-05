@@ -253,15 +253,16 @@ impl EnvSource for FileSource {
     fn load(&self) -> Result<SourceSnapshot, SourceError> {
         let version = {
             let cache = self.cached_vars.lock();
-            if cache.is_some() && !self.check_modified() {
-                let vars = cache.clone().unwrap();
-                let v = *self.version.lock();
-                return Ok(SourceSnapshot {
-                    source_id: self.id.clone(),
-                    variables: vars.into(),
-                    timestamp: std::time::Instant::now(),
-                    version: v,
-                });
+            if let Some(vars) = cache.as_ref() {
+                if !self.check_modified() {
+                    let v = *self.version.lock();
+                    return Ok(SourceSnapshot {
+                        source_id: self.id.clone(),
+                        variables: vars.clone().into(),
+                        timestamp: std::time::Instant::now(),
+                        version: v,
+                    });
+                }
             }
 
             let mut next = self.next_version.lock();

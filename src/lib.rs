@@ -4,22 +4,40 @@
 //!
 //! ## Quick Start
 //!
-//! ```no_run
-//! use abundantis::{Abundantis, config::MonorepoProviderType};
-//!
-//! # #[tokio::main]
-//! # async fn example() -> abundantis::Result<()> {
-//! let _abundantis = Abundantis::builder()
-//!     .root(".")
-//!     .provider(MonorepoProviderType::Custom)
-//!     .with_shell()
-//!     .env_files(vec![".env", ".env.local"])
-//!     .build()
-//!     .await?;
-//!
-//! # Ok(())
-//! # }
-//! ```
+#![cfg_attr(feature = "async", doc = r#"
+```no_run
+use abundantis::{Abundantis, config::MonorepoProviderType};
+
+# #[tokio::main]
+# async fn example() -> abundantis::Result<()> {
+let _abundantis = Abundantis::builder()
+    .root(".")
+    .provider(MonorepoProviderType::Custom)
+    .with_shell()
+    .env_files(vec![".env", ".env.local"])
+    .build()
+    .await?;
+
+# Ok(())
+# }
+```
+"#)]
+#![cfg_attr(not(feature = "async"), doc = r#"
+```no_run
+use abundantis::{Abundantis, config::MonorepoProviderType};
+
+# fn example() -> abundantis::Result<()> {
+let _abundantis = Abundantis::builder()
+    .root(".")
+    .provider(MonorepoProviderType::Custom)
+    .with_shell()
+    .env_files(vec![".env", ".env.local"])
+    .build()?;
+
+# Ok(())
+# }
+```
+"#)]
 //!
 //! ## Architecture
 //!
@@ -65,6 +83,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(feature = "async")]
+use maybe_async::must_be_async;
+#[cfg(not(feature = "async"))]
+use maybe_async::must_be_sync;
+
 pub use config::{AbundantisConfig, MonorepoProviderType, CacheConfig, InterpolationConfig, ResolutionConfig};
 pub use error::{AbundantisError, Diagnostic, DiagnosticCode, DiagnosticSeverity, Result};
 pub use resolution::{DependencyGraph, ResolutionEngine, ResolutionCache, ResolvedVariable, CacheKey};
@@ -109,7 +132,8 @@ impl Abundantis {
         core::AbundantisBuilder::default()
     }
 
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     pub async fn get_for_file(
         &self,
         key: &str,
@@ -128,26 +152,8 @@ impl Abundantis {
         self.get_in_context_with_filter(key, &context, &active_files).await
     }
 
-    #[cfg(not(feature = "async"))]
-    pub fn get_for_file(
-        &self,
-        key: &str,
-        file_path: &std::path::Path,
-    ) -> crate::Result<Option<Arc<ResolvedVariable>>> {
-        let context = {
-            let workspace = self.workspace.read();
-            workspace.context_for_file(file_path)
-                .ok_or_else(|| AbundantisError::Config {
-                    message: format!("No workspace context found for file: {}", file_path.display()),
-                    path: Some(file_path.to_path_buf()),
-                })?
-        };
-
-        let active_files = self.active_env_files(file_path);
-        self.get_in_context_with_filter(key, &context, &active_files)
-    }
-
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     pub async fn get_in_context(
         &self,
         key: &str,
@@ -156,16 +162,8 @@ impl Abundantis {
         self.resolution.resolve(key, context, &self.registry).await
     }
 
-    #[cfg(not(feature = "async"))]
-    pub fn get_in_context(
-        &self,
-        key: &str,
-        context: &workspace::WorkspaceContext,
-    ) -> crate::Result<Option<Arc<ResolvedVariable>>> {
-        self.resolution.resolve(key, context, &self.registry)
-    }
-
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     pub async fn all_for_file(&self, file_path: &std::path::Path) -> crate::Result<Vec<Arc<ResolvedVariable>>> {
         let context = {
             let workspace = self.workspace.read();
@@ -180,22 +178,8 @@ impl Abundantis {
         self.all_in_context_with_filter(&context, &active_files).await
     }
 
-    #[cfg(not(feature = "async"))]
-    pub fn all_for_file(&self, file_path: &std::path::Path) -> crate::Result<Vec<Arc<ResolvedVariable>>> {
-        let context = {
-            let workspace = self.workspace.read();
-            workspace.context_for_file(file_path)
-                .ok_or_else(|| AbundantisError::Config {
-                    message: format!("No workspace context found for file: {}", file_path.display()),
-                    path: Some(file_path.to_path_buf()),
-                })?
-        };
-
-        let active_files = self.active_env_files(file_path);
-        self.all_in_context_with_filter(&context, &active_files)
-    }
-
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     pub async fn all_in_context(
         &self,
         context: &workspace::WorkspaceContext,
@@ -203,30 +187,9 @@ impl Abundantis {
         self.resolution.all_variables(context, &self.registry).await
     }
 
-    #[cfg(not(feature = "async"))]
-    pub fn all_in_context(
-        &self,
-        context: &workspace::WorkspaceContext,
-    ) -> crate::Result<Vec<Arc<ResolvedVariable>>> {
-        self.resolution.all_variables(context, &self.registry)
-    }
-
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     async fn get_in_context_with_filter(
-        &self,
-        key: &str,
-        context: &workspace::WorkspaceContext,
-        active_files: &[PathBuf],
-    ) -> crate::Result<Option<Arc<ResolvedVariable>>> {
-        let file_source_ids: std::collections::HashSet<source::SourceId> = self.get_source_ids_for_paths(active_files);
-
-        self.resolution
-            .resolve_with_filter(key, context, &self.registry, Some(&file_source_ids))
-            .await
-    }
-
-    #[cfg(not(feature = "async"))]
-    fn get_in_context_with_filter(
         &self,
         key: &str,
         context: &workspace::WorkspaceContext,
@@ -236,9 +199,11 @@ impl Abundantis {
 
         self.resolution
             .resolve_with_filter(key, context, &self.registry, Some(&file_source_ids))
+            .await
     }
 
-    #[cfg(feature = "async")]
+    #[cfg_attr(feature = "async", must_be_async)]
+    #[cfg_attr(not(feature = "async"), must_be_sync)]
     async fn all_in_context_with_filter(
         &self,
         context: &workspace::WorkspaceContext,
@@ -251,47 +216,21 @@ impl Abundantis {
             .await
     }
 
-    #[cfg(not(feature = "async"))]
-    fn all_in_context_with_filter(
-        &self,
-        context: &workspace::WorkspaceContext,
-        active_files: &[PathBuf],
-    ) -> crate::Result<Vec<Arc<ResolvedVariable>>> {
-        let file_source_ids = self.get_source_ids_for_paths(active_files);
-
-        self.resolution
-            .all_variables_with_filter(context, &self.registry, Some(&file_source_ids))
-    }
-
     #[cfg(feature = "async")]
     pub async fn refresh(&self) -> Result<()> {
-        // Invalidate existing sources (clears their caches)
-        for source in self.registry.sync_sources_by_priority() {
-            source.invalidate();
-        }
-
-        // Re-discover workspace packages
-        {
-            let workspace = self.workspace.write();
-            workspace.refresh()?;
-        }
-
-        // Re-discover file sources (new/deleted files)
-        self.rediscover_file_sources()?;
-
-        // Clear all caches
-        self.cache.clear();
-        self.path_to_source_id.write().clear();
-
+        self.refresh_inner()?;
         self.event_bus.publish_async(events::AbundantisEvent::CacheInvalidated {
             scope: None,
         }).await;
-
         Ok(())
     }
 
     #[cfg(not(feature = "async"))]
     pub fn refresh(&self) -> Result<()> {
+        self.refresh_inner()
+    }
+
+    fn refresh_inner(&self) -> Result<()> {
         // Invalidate existing sources (clears their caches)
         for source in self.registry.sync_sources_by_priority() {
             source.invalidate();
@@ -313,12 +252,6 @@ impl Abundantis {
         Ok(())
     }
 
-    #[cfg(feature = "async")]
-    pub fn event_bus(&self) -> &events::EventBus {
-        &self.event_bus
-    }
-
-    #[cfg(not(feature = "async"))]
     pub fn event_bus(&self) -> &events::EventBus {
         &self.event_bus
     }
