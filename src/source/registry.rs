@@ -165,6 +165,23 @@ impl SourceRegistry {
         }
     }
 
+    pub fn is_registered(&self, id: &SourceId) -> bool {
+        self.sync_sources.read().contains_key(id)
+    }
+
+    pub fn unregister_sync(&self, id: &SourceId) {
+        self.sync_sources.write().remove(id);
+        // Also remove from path index if it's a file source
+        if let Some(path) = id.as_str().strip_prefix("file:") {
+            let path_buf = std::path::PathBuf::from(path);
+            self.path_index.write().remove(&path_buf);
+        }
+    }
+
+    pub fn registered_file_paths(&self) -> Vec<std::path::PathBuf> {
+        self.path_index.read().keys().cloned().collect()
+    }
+
     pub fn source_count(&self) -> usize {
         let count = self.sync_sources.read().len();
         #[cfg(feature = "async")]

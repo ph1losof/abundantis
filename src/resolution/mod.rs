@@ -310,15 +310,20 @@ impl ResolutionEngine {
     }
 
     /// Shared resolution logic - works for both async and sync.
+    /// Uses "last match wins" so that later files (e.g., .env.local) override earlier files (e.g., .env).
     fn resolve_inner(
         &self,
         key: &str,
         context: &super::workspace::WorkspaceContext,
         snapshots: &[crate::source::SourceSnapshot],
     ) -> Result<Option<Arc<ResolvedVariable>>> {
+        // Sort snapshots by file precedence order (base files first, override files last)
+        let sorted_snapshots = self.sort_snapshots_by_file_order(snapshots);
+
         let mut resolved = None;
 
-        for snapshot in snapshots {
+        // Iterate through all snapshots - last match wins for file precedence
+        for snapshot in &sorted_snapshots {
             if let Some(variable) = snapshot.variables.iter().find(|v| v.key.as_str() == key) {
                 resolved = Some(self.resolve_variable(
                     variable,
@@ -327,7 +332,7 @@ impl ResolutionEngine {
                     0,
                     &mut Vec::new(),
                 )?);
-                break;
+                // Don't break - keep iterating so later files override earlier ones
             }
         }
 
@@ -347,6 +352,69 @@ impl ResolutionEngine {
         }
 
         Ok(resolved)
+    }
+
+    /// Sort snapshots by file precedence order.
+    /// Files listed later in config.resolution.files.order have higher precedence.
+    /// Non-file sources (shell, memory) are placed first.
+    fn sort_snapshots_by_file_order<'a>(
+        &self,
+        snapshots: &'a [crate::source::SourceSnapshot],
+    ) -> Vec<&'a crate::source::SourceSnapshot> {
+        let file_order = &self.resolution_config.files.order;
+
+        let mut sorted: Vec<_> = snapshots.iter().collect();
+        sorted.sort_by(|a, b| {
+            let a_order = self.get_file_order_index(&a.source_id, file_order);
+            let b_order = self.get_file_order_index(&b.source_id, file_order);
+            a_order.cmp(&b_order)
+        });
+
+        sorted
+    }
+
+    /// Get the order index for a source based on file precedence.
+    /// Returns 0 for non-file sources, and index+1 for file sources based on config order.
+    /// Files not in the order list get a high index (sorted last).
+    fn get_file_order_index(&self, source_id: &crate::source::SourceId, file_order: &[CompactString]) -> usize {
+        let source_str = source_id.as_str();
+        if !source_str.starts_with("file:") {
+            return 0; // Non-file sources come first
+        }
+
+        // Extract filename from path
+        let path = &source_str[5..]; // Skip "file:"
+        let filename = std::path::Path::new(path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("");
+
+        // Find index in file_order
+        for (i, pattern) in file_order.iter().enumerate() {
+            if filename == pattern.as_str() || path.ends_with(pattern.as_str()) {
+                return i + 1; // +1 so non-file sources (0) come first
+            }
+        }
+
+        // Files not in order list get high index (sorted after all ordered files)
+        file_order.len() + 1
+    }
+
+    /// Sort snapshot references by file precedence order.
+    fn sort_snapshot_refs_by_file_order<'a>(
+        &self,
+        snapshots: &[&'a crate::source::SourceSnapshot],
+    ) -> Vec<&'a crate::source::SourceSnapshot> {
+        let file_order = &self.resolution_config.files.order;
+
+        let mut sorted: Vec<_> = snapshots.iter().copied().collect();
+        sorted.sort_by(|a, b| {
+            let a_order = self.get_file_order_index(&a.source_id, file_order);
+            let b_order = self.get_file_order_index(&b.source_id, file_order);
+            a_order.cmp(&b_order)
+        });
+
+        sorted
     }
 
     /// Shared all_variables logic.
@@ -566,8 +634,12 @@ impl ResolutionEngine {
             self.maybe_rebuild_graph(&snapshots)?;
         }
 
+        // Sort filtered snapshots by file precedence order
+        let sorted_filtered = self.sort_snapshot_refs_by_file_order(&filtered_refs);
+
         let mut resolved = None;
-        for snapshot in filtered_refs {
+        // Last match wins for file precedence
+        for snapshot in sorted_filtered {
             if let Some(variable) = snapshot.variables.iter().find(|v| v.key.as_str() == key) {
                 resolved = Some(self.resolve_variable(
                     variable,
@@ -576,7 +648,7 @@ impl ResolutionEngine {
                     0,
                     &mut Vec::new(),
                 )?);
-                break;
+                // Don't break - keep iterating so later files override earlier ones
             }
         }
 
@@ -654,8 +726,12 @@ impl ResolutionEngine {
             self.maybe_rebuild_graph(&snapshots)?;
         }
 
+        // Sort filtered snapshots by file precedence order
+        let sorted_filtered = self.sort_snapshot_refs_by_file_order(&filtered_refs);
+
         let mut resolved = None;
-        for snapshot in filtered_refs {
+        // Last match wins for file precedence
+        for snapshot in sorted_filtered {
             if let Some(variable) = snapshot.variables.iter().find(|v| v.key.as_str() == key) {
                 resolved = Some(self.resolve_variable(
                     variable,
@@ -664,7 +740,7 @@ impl ResolutionEngine {
                     0,
                     &mut Vec::new(),
                 )?);
-                break;
+                // Don't break - keep iterating so later files override earlier ones
             }
         }
 

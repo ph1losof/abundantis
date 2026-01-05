@@ -289,6 +289,7 @@ impl EnvSource for FileSource {
 
     fn invalidate(&self) {
         *self.cached_vars.lock() = None;
+        *self.last_modified.lock() = None;
     }
 }
 

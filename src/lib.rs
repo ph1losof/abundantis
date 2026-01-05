@@ -265,16 +265,23 @@ impl Abundantis {
 
     #[cfg(feature = "async")]
     pub async fn refresh(&self) -> Result<()> {
+        // Invalidate existing sources (clears their caches)
         for source in self.registry.sync_sources_by_priority() {
             source.invalidate();
         }
 
+        // Re-discover workspace packages
         {
             let workspace = self.workspace.write();
             workspace.refresh()?;
         }
 
+        // Re-discover file sources (new/deleted files)
+        self.rediscover_file_sources()?;
+
+        // Clear all caches
         self.cache.clear();
+        self.path_to_source_id.write().clear();
 
         self.event_bus.publish_async(events::AbundantisEvent::CacheInvalidated {
             scope: None,
@@ -285,16 +292,23 @@ impl Abundantis {
 
     #[cfg(not(feature = "async"))]
     pub fn refresh(&self) -> Result<()> {
+        // Invalidate existing sources (clears their caches)
         for source in self.registry.sync_sources_by_priority() {
             source.invalidate();
         }
 
+        // Re-discover workspace packages
         {
             let workspace = self.workspace.write();
             workspace.refresh()?;
         }
 
+        // Re-discover file sources (new/deleted files)
+        self.rediscover_file_sources()?;
+
+        // Clear all caches
         self.cache.clear();
+        self.path_to_source_id.write().clear();
 
         Ok(())
     }
@@ -386,6 +400,62 @@ impl Abundantis {
         }
 
         result
+    }
+
+    #[cfg(feature = "file")]
+    fn rediscover_file_sources(&self) -> Result<()> {
+        use std::collections::HashSet;
+
+        let workspace = self.workspace.read();
+        let mut discovered_paths: HashSet<PathBuf> = HashSet::new();
+
+        // Scan for all env files matching configured patterns
+        for package in workspace.packages() {
+            for pattern in &self.config.workspace.env_files {
+                let full_pattern = package.root.join(pattern.as_str());
+                let pattern_str = full_pattern.to_string_lossy();
+
+                if let Ok(paths) = glob::glob(&pattern_str) {
+                    for entry in paths.flatten() {
+                        if entry.is_file() {
+                            if let Ok(canonical) = entry.canonicalize() {
+                                discovered_paths.insert(canonical);
+                            } else {
+                                discovered_paths.insert(entry);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Register any newly discovered files
+        for path in &discovered_paths {
+            let source_id = source::SourceId::from(format!("file:{}", path.display()));
+            if !self.registry.is_registered(&source_id) {
+                if let Ok(file_source) = source::FileSource::new(path) {
+                    tracing::info!("Discovered new env file: {}", path.display());
+                    self.registry.register_sync(Arc::new(file_source) as Arc<dyn source::EnvSource>);
+                }
+            }
+        }
+
+        // Optionally: remove sources for deleted files
+        let registered_paths = self.registry.registered_file_paths();
+        for registered_path in registered_paths {
+            if !discovered_paths.contains(&registered_path) && !registered_path.exists() {
+                let source_id = source::SourceId::from(format!("file:{}", registered_path.display()));
+                tracing::info!("Removing deleted env file: {}", registered_path.display());
+                self.registry.unregister_sync(&source_id);
+            }
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(feature = "file"))]
+    fn rediscover_file_sources(&self) -> Result<()> {
+        Ok(())
     }
 }
 
