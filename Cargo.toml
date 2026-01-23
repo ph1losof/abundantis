@@ -1,6 +1,6 @@
 [package]
 name = "abundantis"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 description = "High-performance unified environment variable management from multiple sources"
 license = "MIT"
