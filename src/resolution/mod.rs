@@ -407,12 +407,6 @@ impl ResolutionEngine {
         }
 
         if let Some(ref var) = resolved {
-            if var.has_warnings && self.resolution_config.read().type_check {
-                return Err(AbundantisError::CircularDependency {
-                    chain: format!("Cycle detected resolving '{}'", key),
-                });
-            }
-
             let context_hash = self.hash_context(context);
             let cache_key = CacheKey {
                 key: CompactString::new(key),
@@ -473,7 +467,7 @@ impl ResolutionEngine {
         let config = self.resolution_config.read();
         let file_order = &config.files.order;
 
-        let mut sorted: Vec<_> = snapshots.iter().copied().collect();
+        let mut sorted: Vec<_> = snapshots.to_vec();
         sorted.sort_by(|a, b| {
             let a_order = self.get_file_order_index(&a.source_id, file_order);
             let b_order = self.get_file_order_index(&b.source_id, file_order);
@@ -722,11 +716,6 @@ impl ResolutionEngine {
         }
 
         if let Some(ref var) = resolved {
-            if var.has_warnings && self.resolution_config.read().type_check {
-                return Err(AbundantisError::CircularDependency {
-                    chain: format!("Cycle detected resolving '{}'", key),
-                });
-            }
             self.cache.insert(cache_key, Arc::clone(var));
         }
 
@@ -753,10 +742,10 @@ impl ResolutionEngine {
     }
 
     fn hash_context(&self, context: &super::workspace::WorkspaceContext) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
+        use ahash::AHasher;
         use std::hash::{Hash, Hasher};
 
-        let mut hasher = DefaultHasher::new();
+        let mut hasher = AHasher::default();
         context.workspace_root.hash(&mut hasher);
         context.package_root.hash(&mut hasher);
         context.package_name.hash(&mut hasher);

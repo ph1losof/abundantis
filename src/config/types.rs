@@ -223,18 +223,10 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SourcesConfig {
     pub defaults: SourceDefaults,
-}
-
-impl Default for SourcesConfig {
-    fn default() -> Self {
-        Self {
-            defaults: SourceDefaults::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

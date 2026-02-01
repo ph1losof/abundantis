@@ -107,18 +107,12 @@ impl FileSourceManager {
     }
 
     pub fn refresh(&self, options: &SourceRefreshOptions) {
-        let config_backup = if options.preserve_config {
-            Some(self.config.read().clone())
-        } else {
-            None
-        };
-
         for source in self.sources.read().values() {
             source.invalidate();
         }
 
-        if let Some(config) = config_backup {
-            *self.config.write() = config;
+        if !options.preserve_config {
+            *self.config.write() = FileSourceConfig::default();
         }
     }
 
@@ -211,6 +205,7 @@ mod tests {
         manager.get_or_create(&env_path).unwrap();
         manager.set_active_files(Some(vec![".env.local".to_string()]));
 
+        // With preserve_config: true, config should be retained
         manager.refresh(&SourceRefreshOptions {
             preserve_config: true,
         });
@@ -219,13 +214,10 @@ mod tests {
             Some(vec![".env.local".to_string()])
         );
 
+        // With preserve_config: false, config should be reset to default
         manager.refresh(&SourceRefreshOptions {
             preserve_config: false,
         });
-
-        assert_eq!(
-            manager.get_active_files(),
-            Some(vec![".env.local".to_string()])
-        );
+        assert_eq!(manager.get_active_files(), None);
     }
 }

@@ -30,6 +30,7 @@ germi = "0.2.2"
 
 # Performance-critical
 memchr = "2.7"
+ahash = "0.8"
 hashbrown = { version = "0.15", features = ["inline-more"] }
 parking_lot = "0.12"
 smallvec = { version = "1.13", features = ["union"] }

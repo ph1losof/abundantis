@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use compact_str::CompactString;
 
 #[cfg(all(feature = "watch", feature = "async"))]
-use notify::{Event, EventKind};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 
 #[cfg(all(feature = "watch", feature = "async"))]
 use parking_lot::Mutex;
@@ -36,6 +36,8 @@ pub type WatchCallback = Arc<dyn Fn(FileChanged) + Send + Sync>;
 
 #[cfg(all(feature = "watch", feature = "async"))]
 pub struct FileWatcher {
+    #[allow(dead_code)]
+    watcher: Arc<Mutex<notify::RecommendedWatcher>>,
     paths: Arc<Mutex<HashMap<PathBuf, CompactString>>>,
     callbacks: Arc<Mutex<Vec<WatchCallback>>>,
 }
@@ -48,11 +50,11 @@ impl FileWatcher {
         let paths_clone = Arc::clone(&paths);
         let callbacks_clone = Arc::clone(&callbacks);
 
-        let _watcher: notify::RecommendedWatcher = notify::recommended_watcher(move |res: Result<Event, _>| {
+        let watcher: notify::RecommendedWatcher = notify::recommended_watcher(move |res: Result<Event, _>| {
             if let Ok(event) = res {
                 for path in event.paths {
                     let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    
+
                     let source_id = {
                         let paths = paths_clone.lock();
                         paths.get(&canonical).cloned()
@@ -80,6 +82,7 @@ impl FileWatcher {
         })?;
 
         Ok(Self {
+            watcher: Arc::new(Mutex::new(watcher)),
             paths,
             callbacks,
         })
@@ -87,11 +90,17 @@ impl FileWatcher {
 
     pub fn watch(&self, path: impl AsRef<Path>, source_id: impl Into<CompactString>) {
         let path = path.as_ref().canonicalize().unwrap_or_else(|_| path.as_ref().to_path_buf());
+        if let Err(e) = self.watcher.lock().watch(&path, RecursiveMode::NonRecursive) {
+            tracing::warn!(path = %path.display(), error = %e, "Failed to watch path");
+        }
         self.paths.lock().insert(path, source_id.into());
     }
 
     pub fn unwatch(&self, path: impl AsRef<Path>) {
         let path = path.as_ref().canonicalize().unwrap_or_else(|_| path.as_ref().to_path_buf());
+        if let Err(e) = self.watcher.lock().unwatch(&path) {
+            tracing::warn!(path = %path.display(), error = %e, "Failed to unwatch path");
+        }
         self.paths.lock().remove(&path);
     }
 
