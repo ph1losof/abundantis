@@ -1,14 +1,17 @@
 use super::traits::*;
 use super::variable::{ParsedVariable, VariableSource};
 use crate::error::SourceError;
+use ahash::AHasher;
 use compact_str::CompactString;
 use parking_lot::Mutex;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 #[cfg(feature = "shell")]
 pub struct ShellSource {
     id: SourceId,
     cached: Mutex<Option<HashMap<String, String>>>,
+    cached_hash: Mutex<Option<u64>>,
 }
 
 #[cfg(feature = "shell")]
@@ -17,11 +20,13 @@ impl ShellSource {
         Self {
             id: SourceId::new("shell:process"),
             cached: Mutex::new(None),
+            cached_hash: Mutex::new(None),
         }
     }
 
     pub fn refresh(&self) {
         *self.cached.lock() = None;
+        *self.cached_hash.lock() = None;
     }
 
     fn get_env(&self) -> HashMap<String, String> {
@@ -33,6 +38,18 @@ impl ShellSource {
         let env: HashMap<String, String> = std::env::vars().collect();
         *cache = Some(env.clone());
         env
+    }
+
+    fn compute_env_hash(&self) -> u64 {
+        let mut hasher = AHasher::default();
+        let mut vars: Vec<_> = std::env::vars().collect();
+        // Sort for consistent hashing
+        vars.sort_by(|a, b| a.0.cmp(&b.0));
+        for (key, value) in vars {
+            key.hash(&mut hasher);
+            value.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 }
 
@@ -74,6 +91,9 @@ impl EnvSource for ShellSource {
             })
             .collect();
 
+        // Update cached hash after loading
+        *self.cached_hash.lock() = Some(self.compute_env_hash());
+
         Ok(SourceSnapshot {
             source_id: self.id.clone(),
             variables: vars.into(),
@@ -83,7 +103,8 @@ impl EnvSource for ShellSource {
     }
 
     fn has_changed(&self) -> bool {
-        false
+        let current_hash = self.compute_env_hash();
+        *self.cached_hash.lock() != Some(current_hash)
     }
 
     fn invalidate(&self) {

@@ -2,7 +2,7 @@ use super::traits::*;
 use super::variable::{ParsedVariable, VariableSource};
 use crate::error::SourceError;
 use compact_str::CompactString;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -11,8 +11,8 @@ pub struct FileSource {
     path: PathBuf,
     id: SourceId,
     last_modified: Mutex<Option<SystemTime>>,
-    cached_vars: Mutex<Option<Vec<ParsedVariable>>>,
-    version: Mutex<Option<u64>>,
+    cached_vars: RwLock<Option<Vec<ParsedVariable>>>,
+    version: RwLock<Option<u64>>,
     next_version: Mutex<u64>,
 }
 
@@ -34,8 +34,8 @@ impl FileSource {
             path,
             id,
             last_modified: Mutex::new(None),
-            cached_vars: Mutex::new(None),
-            version: Mutex::new(None),
+            cached_vars: RwLock::new(None),
+            version: RwLock::new(None),
             next_version: Mutex::new(1),
         })
     }
@@ -45,7 +45,7 @@ impl FileSource {
     }
 
     pub fn reload(&self) -> Result<(), std::io::Error> {
-        *self.cached_vars.lock() = None;
+        *self.cached_vars.write() = None;
         self.load().map_err(|e| match e {
             SourceError::SourceRead { reason, .. } => std::io::Error::other(reason),
             _ => std::io::Error::other(e.to_string()),
@@ -156,7 +156,7 @@ impl FileSource {
             reason: format!("Failed to write file: {}", e),
         })?;
 
-        *self.cached_vars.lock() = None;
+        *self.cached_vars.write() = None;
         {
             let mut next = self.next_version.lock();
             *next += 1;
@@ -210,17 +210,13 @@ impl FileSource {
             reason: format!("Failed to write file: {}", e),
         })?;
 
-        *self.cached_vars.lock() = None;
+        *self.cached_vars.write() = None;
         {
             let mut next = self.next_version.lock();
             *next += 1;
         }
 
         Ok(removed)
-    }
-
-    pub fn get_path(&self) -> &Path {
-        &self.path
     }
 
     pub fn increment_version(&self) -> u64 {
@@ -231,7 +227,7 @@ impl FileSource {
     }
 
     pub fn get_version(&self) -> Option<u64> {
-        *self.version.lock()
+        *self.version.read()
     }
 }
 
@@ -254,11 +250,12 @@ impl EnvSource for FileSource {
     }
 
     fn load(&self) -> Result<SourceSnapshot, SourceError> {
-        let version = {
-            let cache = self.cached_vars.lock();
+        // Fast path: read locks only
+        {
+            let cache = self.cached_vars.read();
             if let Some(vars) = cache.as_ref() {
                 if !self.check_modified() {
-                    let v = *self.version.lock();
+                    let v = *self.version.read();
                     return Ok(SourceSnapshot {
                         source_id: self.id.clone(),
                         variables: vars.clone().into(),
@@ -267,17 +264,20 @@ impl EnvSource for FileSource {
                     });
                 }
             }
+        }
+        // Read locks released here
 
+        // Slow path: write locks
+        let version = {
             let mut next = self.next_version.lock();
             let v = *next;
             *next += 1;
-            drop(next);
             v
         };
 
         let vars = self.parse_file()?;
-        *self.cached_vars.lock() = Some(vars.clone());
-        *self.version.lock() = Some(version);
+        *self.cached_vars.write() = Some(vars.clone());
+        *self.version.write() = Some(version);
 
         Ok(SourceSnapshot {
             source_id: self.id.clone(),
@@ -292,7 +292,7 @@ impl EnvSource for FileSource {
     }
 
     fn invalidate(&self) {
-        *self.cached_vars.lock() = None;
+        *self.cached_vars.write() = None;
         *self.last_modified.lock() = None;
     }
 }

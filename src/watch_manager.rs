@@ -39,7 +39,7 @@ impl WatchManager {
     }
 
     pub fn watch_file(&self, source: Arc<FileSource>) {
-        let path = source.get_path().to_path_buf();
+        let path = source.path().to_path_buf();
         let source_id = source.as_ref().id().as_str();
 
         self.watcher.watch(&path, source_id);

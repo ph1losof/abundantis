@@ -1,6 +1,17 @@
 use compact_str::CompactString;
 use parking_lot::RwLock;
+use std::path::PathBuf;
 use std::sync::Arc;
+
+/// The kind of file system change that occurred.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ChangeKind {
+    Create,
+    Modify,
+    Remove,
+    Rename,
+    Other,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AbundantisEvent {
@@ -18,15 +29,43 @@ pub enum AbundantisEvent {
     CacheInvalidated {
         scope: Option<super::workspace::WorkspaceContext>,
     },
+    /// Emitted when variable resolution fails.
+    ResolutionError {
+        key: CompactString,
+        error: CompactString,
+    },
+    /// Emitted when variable interpolation encounters issues.
+    InterpolationWarning {
+        key: CompactString,
+        message: CompactString,
+    },
+    /// Emitted when configuration changes.
+    ConfigChanged {
+        field: CompactString,
+    },
+    /// Emitted when a file watch event occurs.
+    FileWatchEvent {
+        path: PathBuf,
+        kind: ChangeKind,
+    },
 }
 
+/// Synchronous event subscriber trait.
 pub trait EventSubscriber: Send + Sync {
     fn on_event(&self, event: &AbundantisEvent);
+}
+
+/// Asynchronous event subscriber trait.
+#[cfg(feature = "async")]
+#[async_trait::async_trait]
+pub trait AsyncEventSubscriber: Send + Sync {
+    async fn on_event(&self, event: &AbundantisEvent);
 }
 
 #[cfg(feature = "async")]
 pub struct EventBus {
     subscribers: Arc<RwLock<Vec<Arc<dyn EventSubscriber>>>>,
+    async_subscribers: Arc<RwLock<Vec<Arc<dyn AsyncEventSubscriber>>>>,
     broadcast_tx: tokio::sync::broadcast::Sender<AbundantisEvent>,
 }
 
@@ -37,6 +76,7 @@ impl EventBus {
 
         Self {
             subscribers: Arc::new(RwLock::new(Vec::new())),
+            async_subscribers: Arc::new(RwLock::new(Vec::new())),
             broadcast_tx,
         }
     }
@@ -51,6 +91,7 @@ impl EventBus {
     }
 
     pub async fn publish_async(&self, event: AbundantisEvent) {
+        // Notify sync subscribers in a blocking task
         let subscribers = self.subscribers.read().clone();
         let event_clone = event.clone();
 
@@ -61,7 +102,13 @@ impl EventBus {
         });
 
         if let Err(e) = join_handle.await {
-            tracing::error!("Async event subscriber failed: {:?}", e);
+            tracing::error!("Sync event subscriber failed: {:?}", e);
+        }
+
+        // Notify async subscribers
+        let async_subscribers = self.async_subscribers.read().clone();
+        for subscriber in async_subscribers.iter() {
+            subscriber.on_event(&event).await;
         }
 
         if self.broadcast_tx.send(event).is_err() {
@@ -74,8 +121,18 @@ impl EventBus {
         subscribers.push(subscriber);
     }
 
+    pub fn subscribe_async(&self, subscriber: Arc<dyn AsyncEventSubscriber>) {
+        let mut subscribers = self.async_subscribers.write();
+        subscribers.push(subscriber);
+    }
+
     pub fn unsubscribe(&self, subscriber: &Arc<dyn EventSubscriber>) {
         let mut subscribers = self.subscribers.write();
+        subscribers.retain(|s| !Arc::ptr_eq(s, subscriber));
+    }
+
+    pub fn unsubscribe_async(&self, subscriber: &Arc<dyn AsyncEventSubscriber>) {
+        let mut subscribers = self.async_subscribers.write();
         subscribers.retain(|s| !Arc::ptr_eq(s, subscriber));
     }
 
@@ -85,6 +142,10 @@ impl EventBus {
 
     pub fn subscriber_count(&self) -> usize {
         self.subscribers.read().len()
+    }
+
+    pub fn async_subscriber_count(&self) -> usize {
+        self.async_subscribers.read().len()
     }
 
     pub fn receiver_count(&self) -> usize {
@@ -97,6 +158,7 @@ impl Clone for EventBus {
     fn clone(&self) -> Self {
         Self {
             subscribers: Arc::clone(&self.subscribers),
+            async_subscribers: Arc::clone(&self.async_subscribers),
             broadcast_tx: self.broadcast_tx.clone(),
         }
     }

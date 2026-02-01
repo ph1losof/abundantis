@@ -1,4 +1,7 @@
-use super::{MonorepoProvider, PackageInfo};
+use super::{
+    traverse_glob_patterns, GlobTraversalConfig, MonorepoProvider, PackageInfo,
+    STANDARD_EXCLUSIONS,
+};
 use crate::config::MonorepoProviderType;
 use compact_str::CompactString;
 use std::path::Path;
@@ -29,46 +32,28 @@ impl MonorepoProvider for CustomProvider {
     fn discover_packages(&self, root: &Path) -> crate::Result<Vec<PackageInfo>> {
         let mut packages = Vec::new();
 
-        for pattern in &self.patterns {
-            if *pattern == "." {
-                packages.push(PackageInfo {
-                    root: root.to_path_buf(),
-                    name: None,
-                    relative_path: CompactString::new("."),
-                });
-                continue;
-            }
+        // Handle root directory pattern specially
+        let (root_patterns, glob_patterns): (Vec<_>, Vec<_>) = self
+            .patterns
+            .iter()
+            .partition(|p| p.as_str() == ".");
 
-            let full_pattern = root.join(pattern.as_str());
-            let pattern_str = full_pattern.to_string_lossy();
+        for _ in root_patterns {
+            packages.push(PackageInfo {
+                root: root.to_path_buf(),
+                name: None,
+                relative_path: CompactString::new("."),
+            });
+        }
 
-            if let Ok(glob) = globset::Glob::new(&pattern_str) {
-                let matcher = glob.compile_matcher();
-
-                for entry in walkdir::WalkDir::new(root)
-                    .max_depth(4)
-                    .into_iter()
-                    .filter_entry(|e| {
-                        let name = e.file_name().to_str().unwrap_or("");
-                        !matches!(name, "node_modules" | ".git" | "target" | "dist")
-                    })
-                    .flatten()
-                {
-                    if entry.file_type().is_dir() && matcher.is_match(entry.path()) {
-                        let relative_path = entry
-                            .path()
-                            .strip_prefix(root)
-                            .unwrap_or(entry.path())
-                            .to_string_lossy();
-
-                        packages.push(PackageInfo {
-                            root: entry.path().to_path_buf(),
-                            name: None,
-                            relative_path: CompactString::new(&relative_path),
-                        });
-                    }
-                }
-            }
+        if !glob_patterns.is_empty() {
+            let patterns: Vec<String> = glob_patterns.iter().map(|p| p.to_string()).collect();
+            let config = GlobTraversalConfig {
+                max_depth: 4,
+                excluded_dirs: STANDARD_EXCLUSIONS,
+                marker_file: None, // Custom provider doesn't require marker files
+            };
+            packages.extend(traverse_glob_patterns(root, &patterns, &config, |_| None)?);
         }
 
         Ok(packages)

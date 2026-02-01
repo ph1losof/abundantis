@@ -94,7 +94,14 @@ pub trait EnvSource: Send + Sync {
     fn priority(&self) -> Priority;
     fn capabilities(&self) -> SourceCapabilities;
     fn load(&self) -> Result<SourceSnapshot, SourceError>;
+
+    /// Returns true if the source data may have changed since the last load.
+    ///
+    /// Implementations should track internal version/state changes and compare
+    /// against the last loaded state. This allows callers to skip reloading
+    /// sources that haven't changed.
     fn has_changed(&self) -> bool;
+
     fn invalidate(&self);
     fn metadata(&self) -> SourceMetadata {
         SourceMetadata::default()

@@ -1,9 +1,8 @@
-use super::{MonorepoProvider, PackageInfo};
+use super::{traverse_for_marker_file, GlobTraversalConfig, MonorepoProvider, STANDARD_EXCLUSIONS};
 use crate::config::MonorepoProviderType;
 use compact_str::CompactString;
 use serde::Deserialize;
 use std::path::Path;
-use walkdir::WalkDir;
 
 pub struct NxProvider;
 
@@ -51,40 +50,21 @@ impl MonorepoProvider for NxProvider {
         "nx.json"
     }
 
-    fn discover_packages(&self, root: &Path) -> crate::Result<Vec<PackageInfo>> {
-        let mut packages = Vec::new();
+    fn discover_packages(&self, root: &Path) -> crate::Result<Vec<super::PackageInfo>> {
+        let config = GlobTraversalConfig {
+            max_depth: 4,
+            excluded_dirs: STANDARD_EXCLUSIONS,
+            marker_file: Some("project.json"),
+        };
 
-        for entry in WalkDir::new(root)
-            .max_depth(4)
-            .into_iter()
-            .filter_entry(|e| {
-                let name = e.file_name().to_str().unwrap_or("");
-                !matches!(name, "node_modules" | ".git" | "dist" | "build" | "target")
-            })
-            .flatten()
-        {
-            if entry.file_name() == "project.json" {
-                let project_dir = entry.path().parent().unwrap_or(root);
-
-                let name = std::fs::read_to_string(entry.path())
-                    .ok()
-                    .and_then(|content| serde_json::from_str::<ProjectJson>(&content).ok())
-                    .and_then(|p| p.name)
-                    .map(CompactString::new);
-
-                let relative_path = project_dir
-                    .strip_prefix(root)
-                    .unwrap_or(project_dir)
-                    .to_string_lossy();
-
-                packages.push(PackageInfo {
-                    root: project_dir.to_path_buf(),
-                    name,
-                    relative_path: CompactString::new(&relative_path),
-                });
-            }
-        }
-
-        Ok(packages)
+        traverse_for_marker_file(root, &config, extract_project_name)
     }
+}
+
+fn extract_project_name(project_json_path: &Path) -> Option<CompactString> {
+    std::fs::read_to_string(project_json_path)
+        .ok()
+        .and_then(|content| serde_json::from_str::<ProjectJson>(&content).ok())
+        .and_then(|p| p.name)
+        .map(CompactString::new)
 }

@@ -1,4 +1,7 @@
-use super::{MonorepoProvider, PackageInfo};
+use super::{
+    traverse_glob_patterns, GlobTraversalConfig, MonorepoProvider, PackageInfo,
+    STANDARD_EXCLUSIONS,
+};
 use crate::config::MonorepoProviderType;
 use compact_str::CompactString;
 use std::path::Path;
@@ -58,50 +61,35 @@ impl MonorepoProvider for CargoProvider {
 
         let mut packages = Vec::new();
 
-        for member in members {
-            if member.contains('*') {
-                let pattern = root.join(&member);
-                if let Ok(glob) = globset::Glob::new(&pattern.to_string_lossy()) {
-                    let matcher = glob.compile_matcher();
+        // Separate glob patterns from explicit paths
+        let (glob_patterns, explicit_paths): (Vec<_>, Vec<_>) =
+            members.into_iter().partition(|m| m.contains('*'));
 
-                    for entry in walkdir::WalkDir::new(root)
-                        .max_depth(3)
-                        .into_iter()
-                        .filter_entry(|e| {
-                            let name = e.file_name().to_str().unwrap_or("");
-                            !matches!(name, "target" | ".git")
-                        })
-                        .flatten()
-                    {
-                        if entry.file_type().is_dir()
-                            && matcher.is_match(entry.path())
-                            && entry.path().join("Cargo.toml").exists()
-                        {
-                            let name = extract_cargo_name(entry.path());
-                            let relative_path = entry
-                                .path()
-                                .strip_prefix(root)
-                                .unwrap_or(entry.path())
-                                .to_string_lossy();
+        // Handle glob patterns using shared utility
+        if !glob_patterns.is_empty() {
+            let config = GlobTraversalConfig {
+                max_depth: 4,
+                excluded_dirs: STANDARD_EXCLUSIONS,
+                marker_file: Some("Cargo.toml"),
+            };
+            packages.extend(traverse_glob_patterns(
+                root,
+                &glob_patterns,
+                &config,
+                extract_cargo_name,
+            )?);
+        }
 
-                            packages.push(PackageInfo {
-                                root: entry.path().to_path_buf(),
-                                name,
-                                relative_path: CompactString::new(&relative_path),
-                            });
-                        }
-                    }
-                }
-            } else {
-                let member_path = root.join(&member);
-                if member_path.join("Cargo.toml").exists() {
-                    let name = extract_cargo_name(&member_path);
-                    packages.push(PackageInfo {
-                        root: member_path,
-                        name,
-                        relative_path: CompactString::new(&member),
-                    });
-                }
+        // Handle explicit paths directly
+        for member in explicit_paths {
+            let member_path = root.join(&member);
+            if member_path.join("Cargo.toml").exists() {
+                let name = extract_cargo_name(&member_path);
+                packages.push(PackageInfo {
+                    root: member_path,
+                    name,
+                    relative_path: CompactString::new(&member),
+                });
             }
         }
 

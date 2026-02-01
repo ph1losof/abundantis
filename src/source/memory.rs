@@ -9,6 +9,7 @@ pub struct MemorySource {
     id: SourceId,
     variables: Mutex<IndexMap<CompactString, ParsedVariable>>,
     version: Mutex<u64>,
+    last_loaded_version: Mutex<Option<u64>>,
 }
 
 impl MemorySource {
@@ -17,6 +18,7 @@ impl MemorySource {
             id: SourceId::new("memory"),
             variables: Mutex::new(IndexMap::new()),
             version: Mutex::new(0),
+            last_loaded_version: Mutex::new(None),
         }
     }
 
@@ -109,17 +111,22 @@ impl EnvSource for MemorySource {
 
     fn load(&self) -> Result<SourceSnapshot, SourceError> {
         let vars: Vec<ParsedVariable> = self.variables.lock().values().cloned().collect();
+        let current_version = *self.version.lock();
+
+        // Update last loaded version
+        *self.last_loaded_version.lock() = Some(current_version);
 
         Ok(SourceSnapshot {
             source_id: self.id.clone(),
             variables: vars.into(),
             timestamp: std::time::Instant::now(),
-            version: Some(*self.version.lock()),
+            version: Some(current_version),
         })
     }
 
     fn has_changed(&self) -> bool {
-        true
+        let current = *self.version.lock();
+        *self.last_loaded_version.lock() != Some(current)
     }
 
     fn invalidate(&self) {}
