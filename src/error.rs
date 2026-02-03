@@ -85,6 +85,21 @@ pub enum SourceError {
         source_type: String,
         reason: String,
     },
+
+    #[error("Rate limited by `{provider}`, retry after {retry_after_secs}s")]
+    RateLimited {
+        provider: String,
+        retry_after_secs: u64,
+    },
+
+    #[error("Invalid scope for `{provider}`: {reason}")]
+    InvalidScope { provider: String, reason: String },
+
+    #[error("Connection error to `{provider}`: {reason}")]
+    Connection { provider: String, reason: String },
+
+    #[error("Unknown provider: `{provider}`")]
+    UnknownProvider { provider: String },
 }
 
 pub type Result<T> = std::result::Result<T, AbundantisError>;

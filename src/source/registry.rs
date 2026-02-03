@@ -5,12 +5,21 @@ use hashbrown::HashMap;
 use parking_lot::RwLock;
 use std::sync::Arc;
 
+#[cfg(feature = "remote")]
+use crate::source::remote::{
+    ProviderConfig, RemoteSource, RemoteSourceAdapter, RemoteSourceFactory,
+};
+
 pub struct SourceRegistry {
     sync_sources: RwLock<HashMap<SourceId, Arc<dyn EnvSource>>>,
     #[cfg(feature = "async")]
     async_sources: RwLock<HashMap<SourceId, Arc<dyn AsyncEnvSource>>>,
     path_index: RwLock<HashMap<std::path::PathBuf, SourceId>>,
     factories: RwLock<HashMap<CompactString, Arc<dyn SourceFactory>>>,
+    #[cfg(feature = "remote")]
+    remote_factories: RwLock<HashMap<CompactString, Arc<dyn RemoteSourceFactory>>>,
+    #[cfg(feature = "remote")]
+    remote_adapters: RwLock<HashMap<SourceId, Arc<RemoteSourceAdapter>>>,
 }
 
 impl SourceRegistry {
@@ -38,6 +47,10 @@ impl SourceRegistry {
             async_sources: RwLock::new(HashMap::new()),
             path_index: RwLock::new(HashMap::new()),
             factories: RwLock::new(factories),
+            #[cfg(feature = "remote")]
+            remote_factories: RwLock::new(HashMap::new()),
+            #[cfg(feature = "remote")]
+            remote_adapters: RwLock::new(HashMap::new()),
         }
     }
 
@@ -185,6 +198,105 @@ impl SourceRegistry {
         #[cfg(feature = "async")]
         let count = count + self.async_sources.read().len();
         count
+    }
+}
+
+// Remote source methods
+#[cfg(feature = "remote")]
+impl SourceRegistry {
+    /// Registers a remote source factory for config-driven instantiation.
+    pub fn register_remote_factory(&self, factory: Arc<dyn RemoteSourceFactory>) {
+        self.remote_factories
+            .write()
+            .insert(CompactString::new(factory.provider_id()), factory);
+    }
+
+    /// Creates and registers a remote source from configuration.
+    ///
+    /// This method:
+    /// 1. Looks up the factory for the given provider
+    /// 2. Creates the remote source via the factory
+    /// 3. Wraps it in a RemoteSourceAdapter
+    /// 4. Registers the adapter as an async source
+    ///
+    /// Returns the SourceId of the registered source.
+    pub async fn create_remote_source(
+        &self,
+        provider: &str,
+        config: &ProviderConfig,
+    ) -> Result<SourceId, SourceError> {
+        let factory = {
+            let factories = self.remote_factories.read();
+            factories
+                .get(provider)
+                .cloned()
+                .ok_or_else(|| SourceError::UnknownProvider {
+                    provider: provider.into(),
+                })?
+        };
+
+        let source = factory.create(config).await?;
+        let adapter = Arc::new(RemoteSourceAdapter::new(source));
+        let id = adapter.id().clone();
+
+        // Store in remote_adapters for direct access
+        self.remote_adapters.write().insert(id.clone(), Arc::clone(&adapter));
+
+        // Also register as async source for load_all()
+        self.async_sources.write().insert(id.clone(), adapter);
+
+        Ok(id)
+    }
+
+    /// Registers a pre-created remote source.
+    ///
+    /// Use this when you have an already-constructed RemoteSource instance.
+    pub fn register_remote(&self, source: Arc<dyn RemoteSource>) -> SourceId {
+        let adapter = Arc::new(RemoteSourceAdapter::new(source));
+        let id = adapter.id().clone();
+
+        self.remote_adapters.write().insert(id.clone(), Arc::clone(&adapter));
+        self.async_sources.write().insert(id.clone(), adapter);
+
+        id
+    }
+
+    /// Gets a remote source adapter by ID.
+    pub fn get_remote_adapter(&self, id: &SourceId) -> Option<Arc<RemoteSourceAdapter>> {
+        self.remote_adapters.read().get(id).cloned()
+    }
+
+    /// Gets the inner RemoteSource by ID.
+    pub fn get_remote(&self, id: &SourceId) -> Option<Arc<dyn RemoteSource>> {
+        self.remote_adapters
+            .read()
+            .get(id)
+            .map(|adapter| Arc::clone(adapter.inner()))
+    }
+
+    /// Lists all registered remote source adapters.
+    pub fn remote_sources(&self) -> Vec<Arc<RemoteSourceAdapter>> {
+        self.remote_adapters.read().values().cloned().collect()
+    }
+
+    /// Returns the number of registered remote sources.
+    pub fn remote_source_count(&self) -> usize {
+        self.remote_adapters.read().len()
+    }
+
+    /// Unregisters a remote source by ID.
+    pub fn unregister_remote(&self, id: &SourceId) {
+        self.remote_adapters.write().remove(id);
+        self.async_sources.write().remove(id);
+    }
+
+    /// Lists registered remote factory provider IDs.
+    pub fn remote_factory_ids(&self) -> Vec<String> {
+        self.remote_factories
+            .read()
+            .keys()
+            .map(|k| k.to_string())
+            .collect()
     }
 }
 

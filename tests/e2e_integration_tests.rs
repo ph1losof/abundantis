@@ -1,5 +1,5 @@
 use abundantis::{
-    config::{AbundantisConfig, MonorepoProviderType},
+    config::AbundantisConfig,
     events::{AbundantisEvent, EventSubscriber},
     source::{EnvSource, MemorySource, SourceId},
     CacheKey, ResolutionCache,

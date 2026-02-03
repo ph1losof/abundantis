@@ -227,6 +227,10 @@ fn default_true() -> bool {
 #[serde(default)]
 pub struct SourcesConfig {
     pub defaults: SourceDefaults,
+    /// Remote source provider configurations.
+    #[cfg(feature = "remote")]
+    #[serde(default)]
+    pub remote: crate::source::remote::RemoteSourcesConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

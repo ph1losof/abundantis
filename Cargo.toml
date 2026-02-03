@@ -1,6 +1,6 @@
 [package]
 name = "abundantis"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "High-performance unified environment variable management from multiple sources"
 license = "MIT"
@@ -20,8 +20,23 @@ shell = []
 watch = ["dep:notify", "dep:notify-debouncer-mini", "async"]
 async = ["dep:tokio", "dep:async-trait", "dep:futures", "germi/async"]
 
+# Remote source support
+remote = ["async", "dep:reqwest"]
+
+# Individual remote providers
+doppler = ["remote"]
+aws = ["remote", "dep:aws-sdk-secretsmanager", "dep:aws-config"]
+vault = ["remote"]
+infisical = ["remote"]
+
+# All remote providers
+all-remote = ["doppler", "aws", "vault", "infisical"]
+
 # Full features
 full = ["file", "shell", "watch", "async"]
+
+# Full features with all remote providers
+full-remote = ["full", "all-remote"]
 
 [dependencies]
 # Workspace crates
@@ -68,6 +83,13 @@ tokio = { version = "1.0", features = ["fs", "sync", "rt", "time"], optional = t
 async-trait = { version = "0.1", optional = true }
 futures = { version = "0.3", optional = true }
 
+# Optional: HTTP client for remote sources
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
+
+# Optional: AWS SDK for Secrets Manager
+aws-sdk-secretsmanager = { version = "1.0", optional = true }
+aws-config = { version = "1.0", optional = true }
+
 # Async/sync code generation
 maybe-async = "0.2"
 
@@ -75,3 +97,4 @@ maybe-async = "0.2"
 pretty_assertions = "1.4"
 tempfile = "3.10"
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.5"

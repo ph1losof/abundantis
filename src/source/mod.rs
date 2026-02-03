@@ -13,6 +13,9 @@ mod shell;
 
 mod memory;
 
+#[cfg(feature = "remote")]
+pub mod remote;
+
 pub use config::{
     FileSourceConfig, MemorySourceConfig, RemoteSourceConfig, ShellSourceConfig,
     SourceRefreshOptions,
@@ -32,3 +35,10 @@ pub use shell::ShellSource;
 pub use memory::MemorySource;
 
 pub use traits::SourceSnapshot;
+
+#[cfg(feature = "remote")]
+pub use remote::{
+    AuthConfig, AuthField, AuthStatus, BoxedRemoteSource, ProviderConfig, RemoteProviderInfo,
+    RemoteSource, RemoteSourceAdapter, RemoteSourceFactory, RemoteSourceFactoryFn,
+    RemoteSourceInfo, RemoteSourcesConfig, ScopeLevel, ScopeOption, ScopeSelection,
+};
