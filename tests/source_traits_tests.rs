@@ -116,7 +116,7 @@ fn test_variable_source_shell() {
 #[test]
 fn test_variable_source_remote() {
     let source = VariableSource::Remote {
-        provider: "vault".into(),
+        provider: "doppler".into(),
         path: Some("secret/path".into()),
     };
 

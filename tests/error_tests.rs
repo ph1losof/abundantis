@@ -183,12 +183,12 @@ fn test_source_error_parse_error() {
 #[test]
 fn test_source_error_remote() {
     let err = SourceError::Remote {
-        provider: "vault".to_string(),
+        provider: "doppler".to_string(),
         reason: "Connection timeout".to_string(),
     };
 
     let display = format!("{}", err);
-    assert!(display.contains("vault"));
+    assert!(display.contains("doppler"));
     assert!(display.contains("Connection timeout"));
     assert!(display.contains("Remote source error"));
 }

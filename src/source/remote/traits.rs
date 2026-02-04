@@ -11,7 +11,7 @@ use std::sync::Arc;
 /// Information about a remote provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteProviderInfo {
-    /// Unique identifier for this provider (e.g., "doppler", "aws", "vault").
+    /// Unique identifier for this provider (e.g., "doppler", "aws").
     pub id: CompactString,
     /// Human-readable display name (e.g., "Doppler", "AWS Secrets Manager").
     pub display_name: CompactString,
