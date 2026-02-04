@@ -9,10 +9,6 @@ pub struct AbundantisBuilder {
     custom_sources: Vec<Arc<dyn super::source::EnvSource>>,
     #[cfg(feature = "async")]
     custom_async_sources: Vec<Arc<dyn super::source::AsyncEnvSource>>,
-    #[cfg(feature = "remote")]
-    remote_sources: Vec<Arc<dyn super::source::RemoteSource>>,
-    #[cfg(feature = "remote")]
-    remote_factories: Vec<Arc<dyn super::source::RemoteSourceFactory>>,
     subscribers: Vec<Arc<dyn super::events::EventSubscriber>>,
     root: Option<PathBuf>,
     _event_buffer_size: Option<usize>,
@@ -128,31 +124,6 @@ impl AbundantisBuilder {
         self
     }
 
-    /// Adds a remote source to be registered during build.
-    ///
-    /// The source will be wrapped in a RemoteSourceAdapter and registered
-    /// as both a remote source (for direct access) and an async source
-    /// (for inclusion in load_all()).
-    #[cfg(feature = "remote")]
-    pub fn with_remote_source<R: super::source::RemoteSource + 'static>(mut self, source: R) -> Self {
-        self.remote_sources.push(Arc::new(source));
-        self
-    }
-
-    /// Adds a pre-wrapped Arc remote source.
-    #[cfg(feature = "remote")]
-    pub fn with_remote_source_arc(mut self, source: Arc<dyn super::source::RemoteSource>) -> Self {
-        self.remote_sources.push(source);
-        self
-    }
-
-    /// Registers a remote source factory for config-driven instantiation.
-    #[cfg(feature = "remote")]
-    pub fn with_remote_factory(mut self, factory: Arc<dyn super::source::RemoteSourceFactory>) -> Self {
-        self.remote_factories.push(factory);
-        self
-    }
-
     pub fn subscribe(mut self, subscriber: Arc<dyn super::events::EventSubscriber>) -> Self {
         self.subscribers.push(subscriber);
         self
@@ -224,18 +195,6 @@ impl AbundantisBuilder {
         // Register custom async sources
         for source in &self.custom_async_sources {
             registry.register_async(Arc::clone(source));
-        }
-
-        // Register remote source factories
-        #[cfg(feature = "remote")]
-        for factory in &self.remote_factories {
-            registry.register_remote_factory(Arc::clone(factory));
-        }
-
-        // Register remote sources
-        #[cfg(feature = "remote")]
-        for source in &self.remote_sources {
-            registry.register_remote(Arc::clone(source));
         }
 
         let event_bus = Arc::new(super::events::EventBus::new(

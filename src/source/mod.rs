@@ -38,7 +38,6 @@ pub use traits::SourceSnapshot;
 
 #[cfg(feature = "remote")]
 pub use remote::{
-    AuthConfig, AuthField, AuthStatus, BoxedRemoteSource, ProviderConfig, RemoteProviderInfo,
-    RemoteSource, RemoteSourceAdapter, RemoteSourceFactory, RemoteSourceFactoryFn,
+    AuthConfig, AuthField, AuthStatus, ProviderConfig, RemoteProviderInfo,
     RemoteSourceInfo, RemoteSourcesConfig, ScopeLevel, ScopeOption, ScopeSelection,
 };

@@ -372,7 +372,7 @@ impl ResolutionEngine {
                     crate::config::SourcePrecedence::File
                 } else if source_id_str == "shell" || source_id_str.starts_with("shell:") {
                     crate::config::SourcePrecedence::Shell
-                } else if source_id_str.starts_with("remote:") {
+                } else if source_id_str.starts_with("external:") {
                     crate::config::SourcePrecedence::Remote
                 } else {
                     return true;

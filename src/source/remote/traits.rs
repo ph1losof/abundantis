@@ -1,12 +1,8 @@
 //! Core traits and types for remote secret sources.
 
-use crate::error::SourceError;
-use crate::source::traits::{SourceCapabilities, SourceId, SourceSnapshot};
-use async_trait::async_trait;
 use compact_str::CompactString;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::sync::Arc;
 
 /// Information about a remote provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,84 +183,6 @@ impl ScopeSelection {
     }
 }
 
-/// Core trait for remote secret sources.
-///
-/// Implementations of this trait provide access to secrets from external
-/// secret management services. The trait is designed to be provider-agnostic,
-/// supporting various scope hierarchies and authentication methods.
-#[async_trait]
-pub trait RemoteSource: Send + Sync {
-    /// Returns the source ID, defaulting to the provider ID.
-    fn id(&self) -> SourceId {
-        SourceId::new(self.provider_info().id.as_str())
-    }
-
-    /// Returns information about this provider.
-    fn provider_info(&self) -> RemoteProviderInfo;
-
-    /// Returns the capabilities of this source.
-    fn capabilities(&self) -> SourceCapabilities {
-        SourceCapabilities::ASYNC_ONLY | SourceCapabilities::SECRETS | SourceCapabilities::CACHEABLE
-    }
-
-    /// Returns the authentication fields required by this provider.
-    fn auth_fields(&self) -> Vec<AuthField>;
-
-    /// Returns the current authentication status.
-    async fn auth_status(&self) -> AuthStatus;
-
-    /// Authenticates with the provider using the given configuration.
-    async fn authenticate(&self, config: &AuthConfig) -> Result<(), SourceError>;
-
-    /// Returns the scope levels for this provider's hierarchy.
-    fn scope_levels(&self) -> Vec<ScopeLevel>;
-
-    /// Lists available options at the given scope level.
-    ///
-    /// The `parent` scope provides context for hierarchical providers
-    /// (e.g., listing configs within a specific project).
-    async fn list_options(
-        &self,
-        level: &str,
-        parent: &ScopeSelection,
-    ) -> Result<Vec<ScopeOption>, SourceError>;
-
-    /// Returns whether the source data may have changed since last fetch.
-    async fn has_changed(&self) -> bool {
-        false // Default: no polling
-    }
-
-    /// Fetches secrets for the given scope selection.
-    async fn fetch_secrets(&self, scope: &ScopeSelection) -> Result<SourceSnapshot, SourceError>;
-
-    /// Sets a secret value (optional, not all providers support this).
-    async fn set_secret(
-        &self,
-        _scope: &ScopeSelection,
-        _key: &str,
-        _value: &str,
-    ) -> Result<(), SourceError> {
-        Err(SourceError::UnsupportedOperation {
-            operation: "set_secret".into(),
-            source_type: "remote".into(),
-            reason: "Provider does not support writes".into(),
-        })
-    }
-
-    /// Deletes a secret (optional, not all providers support this).
-    async fn delete_secret(
-        &self,
-        _scope: &ScopeSelection,
-        _key: &str,
-    ) -> Result<(), SourceError> {
-        Err(SourceError::UnsupportedOperation {
-            operation: "delete_secret".into(),
-            source_type: "remote".into(),
-            reason: "Provider does not support deletes".into(),
-        })
-    }
-}
-
 /// Provider-specific configuration.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -353,6 +271,3 @@ pub struct RemoteSourceInfo {
     /// Last error, if any.
     pub last_error: Option<CompactString>,
 }
-
-// Type alias for boxed remote sources
-pub type BoxedRemoteSource = Arc<dyn RemoteSource>;

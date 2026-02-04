@@ -6,9 +6,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 
 #[cfg(feature = "remote")]
-use crate::source::remote::{
-    ProviderConfig, RemoteSource, RemoteSourceAdapter, RemoteSourceFactory,
-};
+use crate::source::remote::ExternalProviderAdapter;
 
 pub struct SourceRegistry {
     sync_sources: RwLock<HashMap<SourceId, Arc<dyn EnvSource>>>,
@@ -16,10 +14,9 @@ pub struct SourceRegistry {
     async_sources: RwLock<HashMap<SourceId, Arc<dyn AsyncEnvSource>>>,
     path_index: RwLock<HashMap<std::path::PathBuf, SourceId>>,
     factories: RwLock<HashMap<CompactString, Arc<dyn SourceFactory>>>,
+    /// External provider adapters (out-of-process providers).
     #[cfg(feature = "remote")]
-    remote_factories: RwLock<HashMap<CompactString, Arc<dyn RemoteSourceFactory>>>,
-    #[cfg(feature = "remote")]
-    remote_adapters: RwLock<HashMap<SourceId, Arc<RemoteSourceAdapter>>>,
+    external_providers: RwLock<HashMap<String, Arc<ExternalProviderAdapter>>>,
 }
 
 impl SourceRegistry {
@@ -48,9 +45,7 @@ impl SourceRegistry {
             path_index: RwLock::new(HashMap::new()),
             factories: RwLock::new(factories),
             #[cfg(feature = "remote")]
-            remote_factories: RwLock::new(HashMap::new()),
-            #[cfg(feature = "remote")]
-            remote_adapters: RwLock::new(HashMap::new()),
+            external_providers: RwLock::new(HashMap::new()),
         }
     }
 
@@ -201,102 +196,46 @@ impl SourceRegistry {
     }
 }
 
-// Remote source methods
+// External provider methods (out-of-process providers)
 #[cfg(feature = "remote")]
 impl SourceRegistry {
-    /// Registers a remote source factory for config-driven instantiation.
-    pub fn register_remote_factory(&self, factory: Arc<dyn RemoteSourceFactory>) {
-        self.remote_factories
-            .write()
-            .insert(CompactString::new(factory.provider_id()), factory);
-    }
-
-    /// Creates and registers a remote source from configuration.
+    /// Registers an external provider adapter.
     ///
-    /// This method:
-    /// 1. Looks up the factory for the given provider
-    /// 2. Creates the remote source via the factory
-    /// 3. Wraps it in a RemoteSourceAdapter
-    /// 4. Registers the adapter as an async source
-    ///
-    /// Returns the SourceId of the registered source.
-    pub async fn create_remote_source(
-        &self,
-        provider: &str,
-        config: &ProviderConfig,
-    ) -> Result<SourceId, SourceError> {
-        let factory = {
-            let factories = self.remote_factories.read();
-            factories
-                .get(provider)
-                .cloned()
-                .ok_or_else(|| SourceError::UnknownProvider {
-                    provider: provider.into(),
-                })?
-        };
+    /// Also registers it as an async source for load_all().
+    pub fn register_external_provider(&self, adapter: Arc<ExternalProviderAdapter>) {
+        let provider_id = adapter.provider_id().to_string();
+        let source_id = adapter.id().clone();
 
-        let source = factory.create(config).await?;
-        let adapter = Arc::new(RemoteSourceAdapter::new(source));
-        let id = adapter.id().clone();
-
-        // Store in remote_adapters for direct access
-        self.remote_adapters.write().insert(id.clone(), Arc::clone(&adapter));
-
-        // Also register as async source for load_all()
-        self.async_sources.write().insert(id.clone(), adapter);
-
-        Ok(id)
+        self.external_providers.write().insert(provider_id, Arc::clone(&adapter));
+        self.async_sources.write().insert(source_id, adapter);
     }
 
-    /// Registers a pre-created remote source.
-    ///
-    /// Use this when you have an already-constructed RemoteSource instance.
-    pub fn register_remote(&self, source: Arc<dyn RemoteSource>) -> SourceId {
-        let adapter = Arc::new(RemoteSourceAdapter::new(source));
-        let id = adapter.id().clone();
-
-        self.remote_adapters.write().insert(id.clone(), Arc::clone(&adapter));
-        self.async_sources.write().insert(id.clone(), adapter);
-
-        id
+    /// Gets an external provider by ID.
+    pub fn get_external_provider(&self, provider_id: &str) -> Option<Arc<ExternalProviderAdapter>> {
+        self.external_providers.read().get(provider_id).cloned()
     }
 
-    /// Gets a remote source adapter by ID.
-    pub fn get_remote_adapter(&self, id: &SourceId) -> Option<Arc<RemoteSourceAdapter>> {
-        self.remote_adapters.read().get(id).cloned()
+    /// Lists all registered external providers.
+    pub fn external_providers(&self) -> Vec<Arc<ExternalProviderAdapter>> {
+        self.external_providers.read().values().cloned().collect()
     }
 
-    /// Gets the inner RemoteSource by ID.
-    pub fn get_remote(&self, id: &SourceId) -> Option<Arc<dyn RemoteSource>> {
-        self.remote_adapters
-            .read()
-            .get(id)
-            .map(|adapter| Arc::clone(adapter.inner()))
+    /// Returns the number of registered external providers.
+    pub fn external_provider_count(&self) -> usize {
+        self.external_providers.read().len()
     }
 
-    /// Lists all registered remote source adapters.
-    pub fn remote_sources(&self) -> Vec<Arc<RemoteSourceAdapter>> {
-        self.remote_adapters.read().values().cloned().collect()
+    /// Unregisters an external provider by ID.
+    pub fn unregister_external_provider(&self, provider_id: &str) {
+        if let Some(adapter) = self.external_providers.write().remove(provider_id) {
+            let source_id = adapter.id().clone();
+            self.async_sources.write().remove(&source_id);
+        }
     }
 
-    /// Returns the number of registered remote sources.
-    pub fn remote_source_count(&self) -> usize {
-        self.remote_adapters.read().len()
-    }
-
-    /// Unregisters a remote source by ID.
-    pub fn unregister_remote(&self, id: &SourceId) {
-        self.remote_adapters.write().remove(id);
-        self.async_sources.write().remove(id);
-    }
-
-    /// Lists registered remote factory provider IDs.
-    pub fn remote_factory_ids(&self) -> Vec<String> {
-        self.remote_factories
-            .read()
-            .keys()
-            .map(|k| k.to_string())
-            .collect()
+    /// Lists registered external provider IDs.
+    pub fn external_provider_ids(&self) -> Vec<String> {
+        self.external_providers.read().keys().cloned().collect()
     }
 }
 

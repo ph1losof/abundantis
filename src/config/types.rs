@@ -227,10 +227,134 @@ fn default_true() -> bool {
 #[serde(default)]
 pub struct SourcesConfig {
     pub defaults: SourceDefaults,
-    /// Remote source provider configurations.
+    /// Remote source provider configurations (legacy).
     #[cfg(feature = "remote")]
     #[serde(default)]
     pub remote: crate::source::remote::RemoteSourcesConfig,
+    /// External provider configuration.
+    #[cfg(feature = "remote")]
+    #[serde(default)]
+    pub providers: ProvidersConfig,
+}
+
+/// Configuration for external out-of-process providers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProvidersConfig {
+    /// Path to the directory containing provider binaries.
+    /// Default: ~/.local/share/ecolog/providers
+    #[serde(default = "default_providers_path")]
+    pub path: PathBuf,
+    /// Individual provider configurations.
+    #[serde(flatten)]
+    pub providers: std::collections::HashMap<String, ExternalProviderConfig>,
+}
+
+impl Default for ProvidersConfig {
+    fn default() -> Self {
+        Self {
+            path: default_providers_path(),
+            providers: std::collections::HashMap::new(),
+        }
+    }
+}
+
+fn default_providers_path() -> PathBuf {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(".local/share/ecolog/providers");
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            return PathBuf::from(local_app_data).join("ecolog\\providers");
+        }
+    }
+    PathBuf::from(".ecolog/providers")
+}
+
+/// Configuration for an individual external provider.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExternalProviderConfig {
+    /// Whether this provider is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Override the binary path (instead of using providers_path).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<PathBuf>,
+    /// When to spawn the provider process.
+    #[serde(default)]
+    pub spawn: SpawnStrategy,
+    /// Provider-specific settings.
+    #[serde(flatten)]
+    pub settings: std::collections::HashMap<String, serde_json::Value>,
+}
+
+impl Default for ExternalProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            binary: None,
+            spawn: SpawnStrategy::default(),
+            settings: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl ExternalProviderConfig {
+    /// Creates an enabled provider config.
+    pub fn enabled() -> Self {
+        Self {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+
+    /// Sets a custom binary path.
+    pub fn with_binary(mut self, path: impl Into<PathBuf>) -> Self {
+        self.binary = Some(path.into());
+        self
+    }
+
+    /// Sets the spawn strategy.
+    pub fn with_spawn(mut self, spawn: SpawnStrategy) -> Self {
+        self.spawn = spawn;
+        self
+    }
+
+    /// Adds a setting.
+    pub fn with_setting(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<serde_json::Value>,
+    ) -> Self {
+        self.settings.insert(key.into(), value.into());
+        self
+    }
+
+    /// Gets a string setting.
+    pub fn get_string(&self, key: &str) -> Option<&str> {
+        self.settings.get(key).and_then(|v| v.as_str())
+    }
+
+    /// Gets a bool setting.
+    pub fn get_bool(&self, key: &str) -> Option<bool> {
+        self.settings.get(key).and_then(|v| v.as_bool())
+    }
+}
+
+/// When to spawn the provider process.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpawnStrategy {
+    /// Spawn on first access (default).
+    #[default]
+    Lazy,
+    /// Spawn at LSP startup.
+    Eager,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
